@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
@@ -18,12 +18,14 @@ ssl_context.load_cert_chain(certfile='cert.pem', keyfile='key.pem')
 
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key="secret-key", session_cookie="session")
+app.add_middleware(SessionMiddleware, secret_key="6787d47b2154bae710e4ed2b629e0206b51049875a5c672cbe51f612968ec6dd", session_cookie="session")
+
+state_code_verifier_mapping = {}
 
 
 CLIENT_ID = "23QYWY"
 CLIENT_SECRET = "7f54c9654dded4659eab9898429e7471"
-REDIRECT_URI = "https://localhost:8000/callback"
+REDIRECT_URI = "https://0.0.0.0:8000/callback"
 
 
 oauth = OAuth()
@@ -76,10 +78,9 @@ def redirect_to_fitbit_service():
 
 
 @app.get('/auth')
-async def auth(request: Request):
+async def auth():
     # Generate a code verifier - a random 128-byte string
     code_verifier = secrets.token_urlsafe(128)
-    request.session['code_verifier'] = code_verifier
 
     # Generate a code challenge by hashing the verifier and base64 encoding it
     m = hashlib.sha256()
@@ -88,10 +89,11 @@ async def auth(request: Request):
 
     # Store the state value in the session
     state = token_urlsafe(16)
-    request.session['state'] = state
+    print(state, "before sending")
+    state_code_verifier_mapping[state] = code_verifier  # Store the state and code_verifier in the 'database'
 
     # Build the authorization url and redirect user to Fitbit for authorization
-    redirect_uri = "https://your-domain.com/callback"  # Replace with your desired callback URL
+    redirect_uri = "https://0.0.0.0:8000/callback"  # Replace with your desired callback URL
     params = {
         "client_id": CLIENT_ID,
         "response_type": "code",
@@ -108,48 +110,73 @@ async def auth(request: Request):
 
 
 
+# @app.get('/callback')
+# async def callback(request: Request):
+#     # Simply print or log all the parameters received in the callback
+#     logging.info(f'Full callback URL: {request.url}')
+#     logging.info(f'Query parameters: {request.query_params}')
+
+#     return {"message": "Callback received", "parameters": dict(request.query_params)}
+
+
 @app.get('/callback')
 async def callback(request: Request):
-    # Get the code verifier from the session
-    code_verifier = request.session.get('code_verifier')
-
-    # Get the authorization code from the query string
-    code = request.query_params.get('code')
+    # Simply print or log all the parameters received in the callback
     logging.info(f'Full callback URL: {request.url}')
-    received_state = request.query_params.get('state')
-    logging.info(f'Received state: {received_state}')
-    stored_state = request.session.get('state')
-    logging.info(f'Stored state: {stored_state}')
+    logging.info(f'Query parameters: {request.query_params}')
 
-    if received_state != stored_state:
-        raise HTTPException(status_code=400, detail="CSRF Warning! State mismatch")
+    # Verify state to prevent CSRF attacks
+    state = request.query_params.get('state')
+    print(state, "after sending")
+    code_verifier = state_code_verifier_mapping.get(state)
+    print(code_verifier)
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="Invalid state")
 
-    # Prepare request for access token with code and verifier
+    # Retrieve the authorization code
+    code = request.query_params.get('code')
+
+    token_url = f"https://0.0.0.0:8000/token?code={code}&state={state}"
+    return RedirectResponse(url=token_url)
+
+
+
+@app.get('/token')
+async def token(request: Request):
+    # Retrieve the authorization code and code_verifier from the request parameters
+    code = request.query_params.get('code')
+    state = request.query_params.get('state')
+
+    # Make a POST request to the Fitbit token endpoint to exchange the code for an access token
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': 'Basic ' + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
     }
     data = {
-        'clientId': CLIENT_ID,
         'grant_type': 'authorization_code',
-        'redirect_uri': REDIRECT_URI,
         'code': code,
-        'code_verifier': code_verifier
+        'redirect_uri': "https://0.0.0.0:8000/callback",
+        'code_verifier': code_verifier,  # This should be the same code_verifier that was used to create the code_challenge during the authorization request
     }
-
     response = requests.post('https://api.fitbit.com/oauth2/token', headers=headers, data=data)
 
-    # Check if the request was successful
-    if response.status_code != 200:
-        raise HTTPException(status_code=400, detail="Failed to fetch access token")
+    # If the request was successful, the response should include an access token
+    if response.status_code == 200:
+        token_data = response.json()
+        access_token = token_data.get('access_token')
 
-    token_data = response.json()
-    request.session['token'] = token_data
+        # Use the access token to make a GET request to the Fitbit user endpoint
+        headers = {'Authorization': f'Bearer {access_token}'}
+        response = requests.get('https://api.fitbit.com/1/user/-/profile.json', headers=headers)
 
-    # You can access the user data from the token_data here or perform additional actions
-    # based on the received data.
-
-    return JSONResponse(content=token_data)
+        # If the request was successful, the response should include the user data
+        if response.status_code == 200:
+            user_data = response.json()
+            return {"message": "User data retrieved", "user_data": user_data}
+        else:
+            return {"message": "Failed to retrieve user data"}
+    else:
+        return {"message": "Failed to retrieve access token"}
 
 
 
@@ -166,6 +193,13 @@ async def reset_oauth(request: Request):
     response = RedirectResponse(url='/')
     response.delete_cookie(key="session", domain="localhost") # Make sure to set the correct domain
     return response
+
+
+@app.get("/refresh-cookie")
+async def refresh_cookie(response: Response):
+    # Set the 'Set-Cookie' header to refresh the cookie
+    response.set_cookie(key="cookie_name", value="new_cookie_value", max_age=3600)
+    return {"message": "Cookie refreshed"}
 
 
 if __name__ == "__main__":
