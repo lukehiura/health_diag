@@ -48,7 +48,6 @@ def authenticate_with_fitbit():
 
     # Store the state value in the session
     state = token_urlsafe(16)
-    print(state, "before sending")
     state_code_verifier_mapping[state] = code_verifier  # Store the state and code_verifier in the 'database'
 
     # Build the authorization url and redirect user to Fitbit for authorization
