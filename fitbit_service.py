@@ -11,17 +11,15 @@ import hashlib
 from urllib.parse import urlencode
 import requests
 import ssl
-
-
-ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-ssl_context.load_cert_chain(certfile='cert.pem', keyfile='key.pem')
-
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="6787d47b2154bae710e4ed2b629e0206b51049875a5c672cbe51f612968ec6dd", session_cookie="session")
 
 state_code_verifier_mapping = {}
-
 
 CLIENT_ID = "23QYWY"
 CLIENT_SECRET = "7f54c9654dded4659eab9898429e7471"
@@ -42,9 +40,37 @@ oauth.register(
     },
 )
 
+postgres_username = os.getenv('POSTGRES_USERNAME')
+postgres_password = os.getenv('POSTGRES_PASSWORD')
+postgres_host = os.getenv('POSTGRES_HOST')
+postgres_database = os.getenv('POSTGRES_DATABASE')
 
-def generate_state_token():
-    return secrets.token_urlsafe(16)
+engine = create_engine(
+    f'postgresql://{postgres_username}:{postgres_password}@{postgres_host}/{postgres_database}',
+    echo=True
+)
+
+Session = sessionmaker(bind=engine)
+session = Session()
+
+Base = declarative_base()
+
+ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+ssl_context.load_cert_chain(certfile='cert.pem', keyfile='key.pem')
+
+class User(Base):
+    __tablename__ = 'user_data'
+
+    id = Column(BigInteger, primary_key=True)
+    age = Column(Integer)
+    ambassador = Column(Boolean)
+    autoStrideEnabled = Column(Boolean)
+    # Add other columns as needed
+
+    def __repr__(self):
+        return f"<User(id={self.id}, age={self.age}, ambassador={self.ambassador}, autoStrideEnabled={self.autoStrideEnabled})>"
+
+Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")
@@ -80,7 +106,7 @@ def redirect_to_fitbit_service():
 @app.get('/auth')
 async def auth():
     # Generate a code verifier - a random 128-byte string
-    code_verifier = secrets.token_urlsafe(128)
+    code_verifier = secrets.token_urlsafe(96)  # 96*8/6 is in the range [43, 128]
 
     # Generate a code challenge by hashing the verifier and base64 encoding it
     m = hashlib.sha256()
@@ -136,28 +162,30 @@ async def callback(request: Request):
     # Retrieve the authorization code
     code = request.query_params.get('code')
 
-    token_url = f"https://0.0.0.0:8000/token?code={code}&state={state}"
+    token_url = f"https://0.0.0.0:8000/token?code={code}&state={state}&code_verifier={code_verifier}"
     return RedirectResponse(url=token_url)
 
 
 
 @app.get('/token')
 async def token(request: Request):
-    # Retrieve the authorization code and code_verifier from the request parameters
+    # Retrieve the authorization code and state from the request parameters
     code = request.query_params.get('code')
     state = request.query_params.get('state')
+    code_verifier = request.query_params.get('code_verifier')
 
-    # Make a POST request to the Fitbit token endpoint to exchange the code for an access token
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': 'Basic ' + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
     }
     data = {
+        'client_id': CLIENT_ID,
         'grant_type': 'authorization_code',
         'code': code,
-        'redirect_uri': "https://0.0.0.0:8000/callback",
-        'code_verifier': code_verifier,  # This should be the same code_verifier that was used to create the code_challenge during the authorization request
+        'redirect_uri': REDIRECT_URI,
+        'code_verifier': code_verifier,
     }
+
     response = requests.post('https://api.fitbit.com/oauth2/token', headers=headers, data=data)
 
     # If the request was successful, the response should include an access token
@@ -172,11 +200,25 @@ async def token(request: Request):
         # If the request was successful, the response should include the user data
         if response.status_code == 200:
             user_data = response.json()
+
+            # Create a User object and populate its attributes
+            user = User(
+                age=user_data.get('user').get('age'),
+                ambassador=user_data.get('user').get('ambassador', False),
+                autoStrideEnabled=user_data.get('user').get('autoStrideEnabled', False),
+                # Populate other attributes as needed
+            )
+
+            # Add the User object to the session and commit the changes to the database
+            session.add(user)
+            session.commit()
+
             return {"message": "User data retrieved", "user_data": user_data}
         else:
             return {"message": "Failed to retrieve user data"}
     else:
         return {"message": "Failed to retrieve access token"}
+
 
 
 
@@ -201,6 +243,10 @@ async def refresh_cookie(response: Response):
     response.set_cookie(key="cookie_name", value="new_cookie_value", max_age=3600)
     return {"message": "Cookie refreshed"}
 
+# Close the database connection when the application shuts down
+@app.on_event("shutdown")
+async def close_connection():
+    session.close()
 
 if __name__ == "__main__":
     ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
