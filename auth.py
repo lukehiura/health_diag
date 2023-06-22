@@ -2,7 +2,7 @@
 from authlib.integrations.starlette_client import OAuth
 from secrets import token_urlsafe
 import secrets
-import logging
+from starlette.requests import Session
 import base64
 import hashlib
 from urllib.parse import urlencode
@@ -10,7 +10,6 @@ import requests
 from fastapi.responses import RedirectResponse
 from fastapi import HTTPException, Request
 from models import User
-from database import session
 import os
 from dotenv import load_dotenv
 
@@ -67,15 +66,9 @@ def authenticate_with_fitbit():
 
 
 def callback_handler(request: Request):
-    # Simply print or log all the parameters received in the callback
-    logging.info(f'Full callback URL: {request.url}')
-    logging.info(f'Query parameters: {request.query_params}')
-
     # Verify state to prevent CSRF attacks
     state = request.query_params.get('state')
-    print(state, "after sending")
     code_verifier = state_code_verifier_mapping.get(state)
-    print(code_verifier)
     if not code_verifier:
         raise HTTPException(status_code=400, detail="Invalid state")
 
@@ -85,7 +78,7 @@ def callback_handler(request: Request):
     token_url = f"https://0.0.0.0:8000/token?code={code}&state={state}&code_verifier={code_verifier}"
     return RedirectResponse(url=token_url)
 
-def token_handler(request):
+def token_handler(request: Request, session: Session):
     # Retrieve the authorization code and state from the request parameters
     code = request.query_params.get('code')
     state = request.query_params.get('state')
@@ -106,10 +99,12 @@ def token_handler(request):
 
     response = requests.post('https://api.fitbit.com/oauth2/token', headers=headers, data=data)
 
+    print(response)
     # If the request was successful, the response should include an access token
     if response.status_code == 200:
         token_data = response.json()
         access_token = token_data.get('access_token')
+        session['access_token'] = access_token
 
         # Use the access token to make a GET request to the Fitbit user endpoint
         headers = {'Authorization': f'Bearer {access_token}'}
@@ -117,6 +112,7 @@ def token_handler(request):
 
         # If the request was successful, the response should include the user data
         if response.status_code == 200:
+            
             user_data = response.json()
 
             # Create a User object and populate its attributes
@@ -130,7 +126,7 @@ def token_handler(request):
             session.add(user)
             session.commit()
 
-            return RedirectResponse(url="/")
+            return RedirectResponse(url='/success')
         else:
             return {"message": "Failed to retrieve user data"}
     else:

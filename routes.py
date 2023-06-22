@@ -5,6 +5,8 @@ from database import session
 from auth import authenticate_with_fitbit, callback_handler, token_handler
 from intraday import get_azm_intraday
 from datetime import date
+from fastapi_sessions import SessionManager
+
 
 
 
@@ -54,15 +56,39 @@ async def callback(request: Request):
     return callback_handler(request)
 
 @router.get('/token')
-async def token(request: Request):
+async def token(request: Request, session: Session):
     return token_handler(request)
     
 
 @router.get('/success')
 async def success(request: Request):
-    token = request.session.get('token')
+    access_token = request.session.get('access_token')
     reset_link = '<a href="/reset">Reset OAuth Authentication</a>'
-    return HTMLResponse(content=f'Token: {token}<br>{reset_link}')
+
+    if access_token:
+        # Use the access token to make a GET request to the Fitbit user endpoint
+        headers = {'Authorization': f'Bearer {access_token}'}
+        response = requests.get('https://api.fitbit.com/1/user/-/profile.json', headers=headers)
+
+        # If the request was successful, the response should include the user data
+        if response.status_code == 200:
+            user_data = response.json()
+            first_name = user_data.get('user').get('firstName')
+            last_name = user_data.get('user').get('lastName')
+
+            # Display the user data along with the token and reset link
+            content = f'Token: {access_token}<br>'
+            content += f'First Name: {first_name}<br>'
+            content += f'Last Name: {last_name}<br>'
+            content += reset_link
+
+            return HTMLResponse(content=content)
+
+    # If access token is not available, display a message with the reset link
+    content = 'Authentication Successful, but user data could not be retrieved.<br>'
+    content += reset_link
+    return HTMLResponse(content=content)
+
 
 
 @router.get('/reset')
@@ -83,6 +109,7 @@ async def refresh_cookie(response: Response):
 @router.get("/azm/intraday/{user_id}/{date}/{detail_level}")
 def get_azm_intraday_route(request: Request, user_id: str, date: str, detail_level: str, start_time: str = None, end_time: str = None):
     access_token = request.session.get('token')  # Get the access token from the session
+    print(access_token)
     azm_intraday = get_azm_intraday(user_id, date, detail_level, start_time, end_time, access_token)
     if azm_intraday is not None:
         return {"message": "AZM Intraday data retrieved", "azm_intraday": azm_intraday}
