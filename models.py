@@ -1,8 +1,8 @@
+# models.py
 from sqlalchemy import Column, Integer, Boolean, BigInteger, JSON, String
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
-
 
 class User(Base):
     __tablename__ = 'user_data'

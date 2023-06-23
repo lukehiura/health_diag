@@ -1,27 +1,28 @@
 # auth.py
-from authlib.integrations.starlette_client import OAuth
-from secrets import token_urlsafe
+
+import os
 import secrets
-from starlette.requests import Session
 import base64
 import hashlib
-from urllib.parse import urlencode
 import requests
+from urllib.parse import urlencode
+from fastapi import HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse
-from fastapi import HTTPException, Request
-from models import User
-import os
+from authlib.integrations.starlette_client import OAuth
 from dotenv import load_dotenv
+from starlette.requests import Session
+from secrets import token_urlsafe
+from .main import sessions, get_current_username
+from database import session
+from .models import User
 
 load_dotenv()
 oauth = OAuth()
 state_code_verifier_mapping = {}
-print(os.getenv('CLIENT_ID'),"auth.py")
 
 CLIENT_ID = os.environ['CLIENT_ID']
 CLIENT_SECRET = os.environ['CLIENT_SECRET']
 REDIRECT_URI = os.environ['REDIRECT_URI']
-
 
 # Fitbit OAuth configuration
 oauth.register(
@@ -78,12 +79,11 @@ def callback_handler(request: Request):
     token_url = f"https://0.0.0.0:8000/token?code={code}&state={state}&code_verifier={code_verifier}"
     return RedirectResponse(url=token_url)
 
-def token_handler(request: Request, session: Session):
+def token_handler(request: Request, session_id: str = Depends(get_current_username)):
     # Retrieve the authorization code and state from the request parameters
     code = request.query_params.get('code')
     state = request.query_params.get('state')
     code_verifier = request.query_params.get('code_verifier')
-
 
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -104,7 +104,7 @@ def token_handler(request: Request, session: Session):
     if response.status_code == 200:
         token_data = response.json()
         access_token = token_data.get('access_token')
-        session['access_token'] = access_token
+        sessions[session_id]['access_token'] = access_token
 
         # Use the access token to make a GET request to the Fitbit user endpoint
         headers = {'Authorization': f'Bearer {access_token}'}

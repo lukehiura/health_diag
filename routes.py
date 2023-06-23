@@ -1,11 +1,13 @@
 # routes.py
-from fastapi import APIRouter, Request, HTTPException, Response
+from fastapi import APIRouter, Request, HTTPException, Response, Depends
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from database import session
-from auth import authenticate_with_fitbit, callback_handler, token_handler
+from .auth import authenticate_with_fitbit, callback_handler, token_handler, get_current_username
 from intraday import get_azm_intraday
 from datetime import date
-from fastapi_sessions import SessionManager
+from uuid import uuid4, UUID
+from .models import SessionData
+from typing import Optional
 
 
 
@@ -56,8 +58,8 @@ async def callback(request: Request):
     return callback_handler(request)
 
 @router.get('/token')
-async def token(request: Request, session: Session):
-    return token_handler(request)
+async def token(request: Request, session_id: Optional[str] = Depends(get_current_username)):
+    return token_handler(request, session_id)
     
 
 @router.get('/success')
@@ -68,7 +70,7 @@ async def success(request: Request):
     if access_token:
         # Use the access token to make a GET request to the Fitbit user endpoint
         headers = {'Authorization': f'Bearer {access_token}'}
-        response = requests.get('https://api.fitbit.com/1/user/-/profile.json', headers=headers)
+        response = request.get('https://api.fitbit.com/1/user/-/profile.json', headers=headers)
 
         # If the request was successful, the response should include the user data
         if response.status_code == 200:
@@ -122,3 +124,12 @@ async def close_connection():
     session.close()
 
 
+@router.post("/session")
+async def create_session(session: SessionData):
+    session_id = str(uuid4())
+    sessions[session_id] = {"username": session.username}
+    return {"session_id": session_id}
+
+@router.get("/users/me")
+async def read_users_me(username: str = Depends(get_current_username)):
+    return {"username": username}

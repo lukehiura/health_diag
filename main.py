@@ -1,43 +1,27 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends, Request
 from dotenv import load_dotenv
-from starlette.middleware.sessions import SessionMiddleware
-from fastapi_sessions import SessionManager
-from fastapi_sessions.backends import InMemoryBackend
-from fastapi_sessions.frontends import SessionCookie, CookieParameters
-from fastapi_sessions.session_verifier import SessionVerifier
-from routes import router
-import os
+from .routes import router
+import redis  # Import the redis library
+
+
+from .auth import authenticate_with_fitbit, callback_handler, token_handler
 
 load_dotenv()
 
-# Create session frontend
-cookie_params = CookieParameters()
-session_frontend = SessionCookie(
-    cookie_name="session_cookie",
-    identifier="general_verifier",
-    auto_error=True,
-    secret_key=os.environ['COOKIE_KEY'],
-    cookie_params=cookie_params,
-)
-
-# Create session backend
-session_backend = InMemoryBackend()
-
-# Create session verifier
-class BasicVerifier(SessionVerifier):
-    async def verify_session(self, session_id: str) -> bool:
-        # Verify if the session exists in the backend
-        return await session_backend.exists(session_id)
-
-session_verifier = BasicVerifier()
-
 app = FastAPI()
-app.add_middleware(SessionManager, secret_key=os.environ['SECRET_KEY'])
 
-app.add_middleware(SessionMiddleware, secret_key=os.environ['SECRET_KEY'], session_cookie="session")
+r = redis.Redis(host='localhost', port=6379, db=0)
+
+# Dependency
+def get_current_username(session_id: str):
+    session_data = r.get(session_id)  # Use r.get to fetch data from Redis
+    if not session_data:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+    return session_data.decode()  # Decode from bytes to string
 
 app.include_router(router)
+
 
 if __name__ == "__main__":
     uvicorn.run(
