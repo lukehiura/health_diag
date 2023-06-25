@@ -3,7 +3,7 @@ from fastapi import APIRouter, Request, HTTPException, Response, Depends
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from database import session
 from .auth import authenticate_with_fitbit, callback_handler, token_handler, get_current_username
-from intraday import get_azm_intraday
+from intraday import get_azm_intraday, get_activities_intraday
 from datetime import date
 from uuid import uuid4, UUID
 from .models import SessionData
@@ -117,6 +117,29 @@ def get_azm_intraday_route(request: Request, user_id: str, date: str, detail_lev
         return {"message": "AZM Intraday data retrieved", "azm_intraday": azm_intraday}
     else:
         return {"message": "Failed to retrieve AZM Intraday data"}
+    
+
+@router.get("/azm/intraday/{user_id}/{date}/{detail_level}")
+def get_azm_intraday_route(request: Request, user_id: str, date: str, detail_level: str, start_time: str = None, end_time: str = None):
+    access_token = request.session.get('token')  # Get the access token from the session
+    azm_intraday = get_azm_intraday(user_id, date, detail_level, start_time, end_time, access_token)
+    if azm_intraday is not None:
+        return {"message": "AZM Intraday data retrieved", "azm_intraday": azm_intraday}
+    else:
+        return {"message": "Failed to retrieve AZM Intraday data"}
+
+
+@router.get("/intraday/activities/{user_id}/{resource}/{date}/{detail_level}")
+def get_intraday_activities_route(request: Request, user_id: str, resource: str, date: str, detail_level: str, start_time: str = None, end_time: str = None):
+    access_token = request.session.get('token')  # Get the access token from the session
+    intraday_activities = get_activities_intraday(user_id, resource, date, detail_level, start_time, end_time, access_token)
+    if intraday_activities is not None:
+        return {"message": "Intraday activities retrieved", "intraday_activities": intraday_activities}
+    else:
+        return {"message": "Failed to retrieve intraday activities"}
+
+
+
 
 # Close the database connection when the application shuts down
 @router.on_event("shutdown")
